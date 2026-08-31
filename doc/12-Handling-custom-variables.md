@@ -11,3 +11,7 @@ Examples
 * Add fields for existing commands
 * Allow to fill an [array of interfaces](14-Fields-example-interfaces-array.md)
 
+Inheritance
+-----------
+* Extend instead of override: [additive array variables](13-Additive-array-variables.md)
+

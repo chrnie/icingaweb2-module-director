@@ -86,3 +86,11 @@ Now you are all done and ready to a) launch the Import and b) trigger your synch
 run.
 
 
+
+#### Extending arrays instead of overriding them
+
+When a sync property writes a custom variable, you may choose an **Assignment**
+of `=`, `+=` or `-=`. This decides whether the synchronized value replaces the
+value inherited from imported templates, or whether it extends respectively
+shrinks it. See [additive array variables](13-Additive-array-variables.md) for
+details.
