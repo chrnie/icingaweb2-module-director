@@ -26,6 +26,7 @@ class CustomVariableCache
             'varname'  => 'v.varname',
             'varvalue' => 'v.varvalue',
             'format'   => 'v.format',
+            'entry_deltas' => 'v.entry_deltas',
             'checksum' => '(NULL)',
         );
 

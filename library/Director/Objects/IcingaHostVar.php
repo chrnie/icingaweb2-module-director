@@ -13,6 +13,7 @@ class IcingaHostVar extends IcingaObject
         'varname'   => null,
         'varvalue'  => null,
         'format'    => null,
+        'entry_deltas' => null,
     );
 
     public function onInsert()

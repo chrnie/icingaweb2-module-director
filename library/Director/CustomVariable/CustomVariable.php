@@ -11,6 +11,24 @@ use LogicException;
 
 abstract class CustomVariable implements IcingaConfigRenderer
 {
+    /**
+     * The operators a single entry carries while it is being edited
+     *
+     * These describe what a form row means, not how we store it: a variable
+     * either assigns a value ('=') or extends an inherited one ('+' and '-'),
+     * and CustomVariableArray keeps the latter as two named sets
+     */
+    public const OPERATOR_SET = '=';
+    public const OPERATOR_ADD = '+';
+    public const OPERATOR_REMOVE = '-';
+
+    /** @var string[] Every operator a form row may carry */
+    public static $supportedOperators = [
+        self::OPERATOR_SET,
+        self::OPERATOR_ADD,
+        self::OPERATOR_REMOVE,
+    ];
+
     protected $key;
 
     protected $value;
@@ -86,6 +104,12 @@ abstract class CustomVariable implements IcingaConfigRenderer
     public function getKey()
     {
         return $this->key;
+    }
+
+    /** @return bool Whether we extend an inherited value, arrays only */
+    public function hasDelta()
+    {
+        return false;
     }
 
     /**
@@ -188,6 +212,17 @@ abstract class CustomVariable implements IcingaConfigRenderer
         return ! $this->equals($var);
     }
 
+    /**
+     * Like equals(), but also comparing what we add and remove
+     *
+     * @param CustomVariable $var
+     * @return bool
+     */
+    public function equalsIncludingDeltas(CustomVariable $var)
+    {
+        return $this->equals($var);
+    }
+
     protected function setChecksum($checksum)
     {
         $this->checksum = $checksum;
@@ -261,6 +296,10 @@ abstract class CustomVariable implements IcingaConfigRenderer
         }
         if (property_exists($row, 'checksum')) {
             $var->setChecksum($row->checksum);
+        }
+
+        if (property_exists($row, 'entry_deltas') && $var instanceof CustomVariableArray) {
+            $var->setDbDeltas($row->entry_deltas);
         }
 
         $var->loadedFromDb = true;

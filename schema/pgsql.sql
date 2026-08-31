@@ -10,6 +10,7 @@
 CREATE TYPE enum_activity_action AS ENUM('create', 'delete', 'modify');
 CREATE TYPE enum_boolean AS ENUM('y', 'n');
 CREATE TYPE enum_property_format AS ENUM('string', 'expression', 'json');
+CREATE TYPE enum_custom_var_operator AS ENUM('=', '+=', '-=');
 CREATE TYPE enum_object_type_all AS ENUM('object', 'template', 'apply', 'external_object'); -- TODO: can we check for an invalid
 CREATE TYPE enum_object_type AS ENUM('object', 'template', 'external_object');
 CREATE TYPE enum_timeperiod_range_type AS ENUM('include', 'exclude');
@@ -579,6 +580,7 @@ CREATE TABLE icinga_command_var (
   varname character varying(255) NOT NULL,
   varvalue text DEFAULT NULL,
   format enum_property_format NOT NULL DEFAULT 'string',
+  entry_deltas text DEFAULT NULL,
   PRIMARY KEY (command_id, varname),
   CONSTRAINT icinga_command_var_command
   FOREIGN KEY (command_id)
@@ -808,6 +810,7 @@ CREATE TABLE icinga_host_var (
   varname character varying(255) NOT NULL,
   varvalue text DEFAULT NULL,
   format enum_property_format, -- immer string vorerst
+  entry_deltas text DEFAULT NULL,
   PRIMARY KEY (host_id, varname),
   CONSTRAINT icinga_host_var_host
   FOREIGN KEY (host_id)
@@ -981,6 +984,7 @@ CREATE TABLE icinga_service_var (
   varname character varying(255) NOT NULL,
   varvalue text DEFAULT NULL,
   format enum_property_format,
+  entry_deltas text DEFAULT NULL,
   PRIMARY KEY (service_id, varname),
   CONSTRAINT icinga_service_var_service
   FOREIGN KEY (service_id)
@@ -1094,6 +1098,7 @@ CREATE TABLE icinga_service_set_var (
   varname character varying(255) NOT NULL,
   varvalue text DEFAULT NULL,
   format enum_property_format NOT NULL DEFAULT 'string',
+  entry_deltas text DEFAULT NULL,
   PRIMARY KEY (service_set_id, varname),
   CONSTRAINT icinga_service_set_var_service_set
   FOREIGN KEY (service_set_id)
@@ -1370,6 +1375,7 @@ CREATE TABLE icinga_user_var (
   varname character varying(255) NOT NULL,
   varvalue text DEFAULT NULL,
   format enum_property_format NOT NULL DEFAULT 'string',
+  entry_deltas text DEFAULT NULL,
   PRIMARY KEY (user_id, varname),
   CONSTRAINT icinga_user_var_user
   FOREIGN KEY (user_id)
@@ -1750,6 +1756,7 @@ CREATE TABLE sync_property (
   priority smallint NOT NULL,
   filter_expression text DEFAULT NULL,
   merge_policy enum_sync_property_merge_policy DEFAULT NULL,
+  var_operator enum_custom_var_operator DEFAULT NULL,
   PRIMARY KEY (id),
   CONSTRAINT sync_property_rule
   FOREIGN KEY (rule_id)
@@ -1823,6 +1830,7 @@ CREATE TABLE icinga_notification_var (
   varname VARCHAR(255) NOT NULL,
   varvalue TEXT DEFAULT NULL,
   format enum_property_format,
+  entry_deltas text DEFAULT NULL,
   PRIMARY KEY (notification_id, varname),
   CONSTRAINT icinga_notification_var_notification
   FOREIGN KEY (notification_id)
@@ -2318,6 +2326,7 @@ CREATE TABLE branched_icinga_host (
   imports TEXT DEFAULT NULL,
   groups TEXT DEFAULT NULL,
   vars TEXT DEFAULT NULL,
+  var_deltas TEXT DEFAULT NULL,
 
   set_null TEXT DEFAULT NULL,
   PRIMARY KEY (branch_uuid, uuid),
@@ -2427,6 +2436,7 @@ CREATE TABLE branched_icinga_user (
   imports TEXT DEFAULT NULL,
   groups TEXT DEFAULT NULL,
   vars TEXT DEFAULT NULL,
+  var_deltas TEXT DEFAULT NULL,
   set_null TEXT DEFAULT NULL,
   PRIMARY KEY (branch_uuid, uuid),
   CONSTRAINT icinga_user_branch
@@ -2627,6 +2637,7 @@ CREATE TABLE branched_icinga_service (
   imports TEXT DEFAULT NULL,
   groups TEXT DEFAULT NULL,
   vars TEXT DEFAULT NULL,
+  var_deltas TEXT DEFAULT NULL,
   set_null TEXT DEFAULT NULL,
   PRIMARY KEY (branch_uuid, uuid),
   CONSTRAINT icinga_service_branch
@@ -2698,6 +2709,7 @@ CREATE TABLE branched_icinga_notification (
 
   imports TEXT DEFAULT NULL,
   vars TEXT DEFAULT NULL,
+  var_deltas TEXT DEFAULT NULL,
   set_null TEXT DEFAULT NULL,
   PRIMARY KEY (branch_uuid, uuid),
   CONSTRAINT icinga_notification_branch
@@ -2803,4 +2815,4 @@ CREATE INDEX usergroup_user_resolved_usergroup ON icinga_usergroup_user_resolved
 
 INSERT INTO director_schema_migration
   (schema_version, migration_time)
-  VALUES (192, NOW());
+  VALUES (193, NOW());

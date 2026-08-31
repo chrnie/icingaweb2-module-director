@@ -9,6 +9,7 @@ use Icinga\Module\Director\IcingaConfig\IcingaConfigRenderer;
 use Icinga\Module\Director\Objects\IcingaObject;
 use Countable;
 use Exception;
+use InvalidArgumentException;
 use Iterator;
 
 class CustomVariables implements Iterator, Countable, IcingaConfigRenderer
@@ -127,9 +128,11 @@ class CustomVariables implements Iterator, Countable, IcingaConfigRenderer
     public function set($key, $value)
     {
         $key = (string) $key;
+        $gotDelta = false;
 
         if ($value instanceof CustomVariable) {
             $value = clone($value);
+            $gotDelta = true;
         } else {
             if ($value === null) {
                 $this->__unset($key);
@@ -140,11 +143,35 @@ class CustomVariables implements Iterator, Countable, IcingaConfigRenderer
 
         // Hint: isset($this->$key) wouldn't conflict with protected properties
         if ($this->__isset($key)) {
-            if ($value->equals($this->get($key))) {
+            // A plain value carries no delta of its own. An empty one is what a
+            // delta variable ships in 'vars', so the current delta survives it -
+            // that is what makes 'vars' and 'var_deltas' order-independent, see
+            // IcingaObject::applyVarDeltas(). Anything else is an assignment,
+            // and an assignment replaces what it inherits instead of extending
+            if (! $gotDelta && $value instanceof CustomVariableArray) {
+                $existing = $this->get($key);
+                if ($existing instanceof CustomVariableArray) {
+                    if (empty($value->getValue())) {
+                        $value->setDbDeltas($existing->getDbDeltas());
+                    } elseif ($existing->hasDelta()) {
+                        $existing->setDeltas(null);
+                    }
+                }
+            }
+
+            if ($value->equalsIncludingDeltas($this->get($key))) {
                 return $this;
             } else {
                 if (get_class($this->vars[$key]) === get_class($value)) {
-                    $this->vars[$key]->setValue($value->getValue())->setModified();
+                    // Hint: both sides carry the very same class, but only the
+                    //       instanceof tells a static analyzer that a delta
+                    //       exists here
+                    $current = $this->vars[$key];
+                    $current->setValue($value->getValue());
+                    if ($current instanceof CustomVariableArray && $value instanceof CustomVariableArray) {
+                        $current->setDeltas($value->getDeltas());
+                    }
+                    $current->setModified();
                 } else {
                     $this->vars[$key] = $value->setLoadedFromDb()->setModified();
                 }
@@ -180,6 +207,7 @@ class CustomVariables implements Iterator, Countable, IcingaConfigRenderer
                 'v.varname',
                 'v.varvalue',
                 'v.format',
+                'v.entry_deltas',
             )
         )->where(sprintf('v.%s = ?', $object->getVarsIdColumn()), $object->get('id'));
 
@@ -220,7 +248,10 @@ class CustomVariables implements Iterator, Countable, IcingaConfigRenderer
                         $foreignColumn => $foreignId,
                         'varname'      => $var->getKey(),
                         'varvalue'     => $var->getDbValue(),
-                        'format'       => $var->getDbFormat()
+                        'format'       => $var->getDbFormat(),
+                        'entry_deltas' => $var instanceof CustomVariableArray
+                            ? $var->getDbDeltas()
+                            : null
                     )
                 );
                 $var->setLoadedFromDb();
@@ -237,7 +268,10 @@ class CustomVariables implements Iterator, Countable, IcingaConfigRenderer
                     $table,
                     array(
                         'varvalue' => $var->getDbValue(),
-                        'format'   => $var->getDbFormat()
+                        'format'   => $var->getDbFormat(),
+                        'entry_deltas' => $var instanceof CustomVariableArray
+                            ? $var->getDbDeltas()
+                            : null
                     ),
                     $where
                 );
@@ -254,6 +288,130 @@ class CustomVariables implements Iterator, Countable, IcingaConfigRenderer
         }
 
         return null;
+    }
+
+    /**
+     * Extend an inherited array by the given entries
+     *
+     * The variable is created when it does not exist yet - a delta needs no own
+     * value to work on, Icinga 2 treats a missing one as an empty array
+     *
+     * @param string $key
+     * @param array  $values
+     * @return self
+     */
+    public function addEntries($key, array $values)
+    {
+        return $this->modifyDelta($key, function (CustomVariableArray $var) use ($values) {
+            $var->addEntries($values);
+        });
+    }
+
+    /**
+     * Shrink an inherited array by the given entries
+     *
+     * @param string $key
+     * @param array  $values
+     * @return self
+     */
+    public function removeEntries($key, array $values)
+    {
+        return $this->modifyDelta($key, function (CustomVariableArray $var) use ($values) {
+            $var->removeEntries($values);
+        });
+    }
+
+    /**
+     * Take over a complete delta, null clears whatever is there
+     *
+     * Hint: silently ignores unknown variables and non-arrays when clearing.
+     *       There is nothing to clear on them, and telling a caller that its
+     *       "no delta here" is invalid would make every reset a special case
+     *
+     * @param string            $key
+     * @param array|object|null $deltas Buckets 'add' and 'remove'
+     * @return self
+     */
+    public function setDeltas($key, $deltas)
+    {
+        if ($deltas === null || $deltas === [] || $deltas === (object) []) {
+            $key = (string) $key;
+            $var = isset($this->vars[$key]) ? $this->vars[$key] : null;
+            if ($var instanceof CustomVariableArray && $var->hasDelta()) {
+                $var->setDeltas(null);
+                $this->modified = true;
+            }
+
+            return $this;
+        }
+
+        return $this->modifyDelta($key, function (CustomVariableArray $var) use ($deltas) {
+            $var->setDeltas($deltas);
+        });
+    }
+
+    /**
+     * @param string $key
+     * @return array|null Buckets 'add' and 'remove', null when there is none
+     */
+    public function getDeltas($key)
+    {
+        $key = (string) $key;
+        if (array_key_exists($key, $this->vars) && $this->vars[$key] instanceof CustomVariableArray) {
+            return $this->vars[$key]->getDeltas();
+        }
+
+        return null;
+    }
+
+    /** @return array varname => delta, for the variables carrying one */
+    public function getAllDeltas()
+    {
+        $deltas = [];
+        foreach ($this->vars as $key => $var) {
+            if ($var->hasBeenDeleted() || ! $var instanceof CustomVariableArray) {
+                continue;
+            }
+            if ($var->hasDelta()) {
+                $deltas[$key] = $var->getDeltas();
+            }
+        }
+        ksort($deltas);
+
+        return $deltas;
+    }
+
+    /**
+     * Hand the array variable behind the given key to the given modifier
+     *
+     * @param string   $key
+     * @param callable $modifier
+     * @return self
+     */
+    protected function modifyDelta($key, callable $modifier)
+    {
+        $key = (string) $key;
+        if (! array_key_exists($key, $this->vars)) {
+            $this->vars[$key] = CustomVariable::create($key, [])->setModified();
+            $this->refreshIndex();
+        }
+
+        $var = $this->vars[$key];
+        if (! $var instanceof CustomVariableArray) {
+            throw new InvalidArgumentException(sprintf(
+                'Only array custom variables can extend an inherited value, "%s" is %s',
+                $key,
+                $var->getType()
+            ));
+        }
+
+        $before = $var->getDbDeltas();
+        $modifier($var);
+        if ($var->getDbDeltas() !== $before) {
+            $this->modified = true;
+        }
+
+        return $this;
     }
 
     public function hasBeenModified()
@@ -341,16 +499,33 @@ class CustomVariables implements Iterator, Countable, IcingaConfigRenderer
         return $this;
     }
 
-    public function toConfigString($renderExpressions = false)
+    /**
+     * @param bool        $renderExpressions
+     * @param object|null $inheritedVars Needed to not add entries twice
+     * @return string
+     */
+    public function toConfigString($renderExpressions = false, $inheritedVars = null)
     {
         $out = '';
 
         foreach ($this as $key => $var) {
             // TODO: ctype_alnum + underscore?
-            $out .= $this->renderSingleVar($key, $var, $renderExpressions);
+            $out .= $this->renderSingleVar($key, $var, $renderExpressions, $inheritedVars);
         }
 
         return $out;
+    }
+
+    /** @return bool Whether we need inherited values, resolving them is expensive */
+    public function needsInheritedValues()
+    {
+        foreach ($this->vars as $var) {
+            if (! $var->hasBeenDeleted() && $var->hasDelta()) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public function toLegacyConfigString()
@@ -396,7 +571,7 @@ class CustomVariables implements Iterator, Countable, IcingaConfigRenderer
      *
      * @return string
      */
-    protected function renderSingleVar($key, $var, $renderExpressions = false)
+    protected function renderSingleVar($key, $var, $renderExpressions = false, $inheritedVars = null)
     {
         if ($key === $this->overrideKeyName) {
             return c::renderKeyOperatorValue(
@@ -404,12 +579,57 @@ class CustomVariables implements Iterator, Countable, IcingaConfigRenderer
                 '+=',
                 $var->toConfigStringPrefetchable($renderExpressions)
             );
-        } else {
-            return c::renderKeyValue(
+        }
+
+        if ($var instanceof CustomVariableArray && $var->hasDelta()) {
+            return $this->renderArrayDelta($key, $var, $renderExpressions, $inheritedVars);
+        }
+
+        return c::renderKeyValue(
+            $this->renderKeyName($key),
+            $var->toConfigStringPrefetchable($renderExpressions)
+        );
+    }
+
+    /**
+     * Render an array extending respectively shrinking an inherited one
+     *
+     * One line per bucket, so a variable both adding and removing gives
+     * "vars.x += [ ... ]" plus "vars.x -= [ ... ]"
+     *
+     * @param string              $key
+     * @param CustomVariableArray $var
+     * @param bool                $renderExpressions
+     * @param object|null         $inheritedVars
+     * @return string
+     */
+    protected function renderArrayDelta($key, CustomVariableArray $var, $renderExpressions, $inheritedVars)
+    {
+        $inherited = null;
+        if ($inheritedVars !== null && property_exists($inheritedVars, $key)) {
+            $inherited = $inheritedVars->$key;
+        }
+
+        $out = '';
+        $added = $var->getAddedValues($inherited);
+        if (! empty($added)) {
+            $out .= c::renderKeyOperatorValue(
                 $this->renderKeyName($key),
-                $var->toConfigStringPrefetchable($renderExpressions)
+                '+=',
+                $var->renderValues($added, $renderExpressions)
             );
         }
+
+        $removed = $var->getRemovedValues();
+        if (! empty($removed)) {
+            $out .= c::renderKeyOperatorValue(
+                $this->renderKeyName($key),
+                '-=',
+                $var->renderValues($removed, $renderExpressions)
+            );
+        }
+
+        return $out;
     }
 
     protected function renderKeyName($key)

@@ -460,6 +460,7 @@ CREATE TABLE icinga_command_var (
   varname VARCHAR(255) NOT NULL COLLATE utf8_bin,
   varvalue TEXT DEFAULT NULL,
   format ENUM('string', 'expression', 'json') NOT NULL DEFAULT 'string',
+  entry_deltas TEXT DEFAULT NULL,
   checksum VARBINARY(20) DEFAULT NULL,
   PRIMARY KEY (command_id, varname),
   INDEX search_idx (varname),
@@ -656,6 +657,7 @@ CREATE TABLE icinga_host_var (
   varname VARCHAR(255) NOT NULL COLLATE utf8_bin,
   varvalue MEDIUMTEXT DEFAULT NULL,
   format enum ('string', 'json', 'expression'), -- immer string vorerst
+  entry_deltas TEXT DEFAULT NULL,
   checksum VARBINARY(20) DEFAULT NULL,
   PRIMARY KEY (host_id, varname),
   INDEX search_idx (varname),
@@ -809,6 +811,7 @@ CREATE TABLE icinga_service_var (
   varname VARCHAR(255) NOT NULL COLLATE utf8_bin,
   varvalue TEXT DEFAULT NULL,
   format enum ('string', 'json', 'expression'),
+  entry_deltas TEXT DEFAULT NULL,
   checksum VARBINARY(20) DEFAULT NULL,
   PRIMARY KEY (service_id, varname),
   INDEX search_idx (varname),
@@ -900,6 +903,7 @@ CREATE TABLE icinga_service_set_var (
   varname VARCHAR(255) NOT NULL COLLATE utf8_bin,
   varvalue TEXT DEFAULT NULL,
   format ENUM('string', 'expression', 'json') NOT NULL DEFAULT 'string',
+  entry_deltas TEXT DEFAULT NULL,
   checksum VARBINARY(20) DEFAULT NULL,
   PRIMARY KEY (service_set_id, varname),
   INDEX search_idx (varname),
@@ -1149,6 +1153,7 @@ CREATE TABLE icinga_user_var (
   varname VARCHAR(255) NOT NULL COLLATE utf8_bin,
   varvalue TEXT DEFAULT NULL,
   format ENUM('string', 'json', 'expression') NOT NULL DEFAULT 'string',
+  entry_deltas TEXT DEFAULT NULL,
   checksum VARBINARY(20) DEFAULT NULL,
   PRIMARY KEY (user_id, varname),
   INDEX search_idx (varname),
@@ -1300,6 +1305,7 @@ CREATE TABLE icinga_notification_var (
   varname VARCHAR(255) NOT NULL COLLATE utf8_bin,
   varvalue TEXT DEFAULT NULL,
   format enum ('string', 'json', 'expression'),
+  entry_deltas TEXT DEFAULT NULL,
   checksum VARBINARY(20) DEFAULT NULL,
   PRIMARY KEY (notification_id, varname),
   INDEX search_idx (varname),
@@ -1601,6 +1607,7 @@ CREATE TABLE sync_property (
   priority SMALLINT UNSIGNED NOT NULL,
   filter_expression TEXT DEFAULT NULL,
   merge_policy ENUM('override', 'merge') NOT NULL,
+  var_operator ENUM('=', '+=', '-=') DEFAULT NULL,
   PRIMARY KEY (id),
   CONSTRAINT sync_property_rule
     FOREIGN KEY sync_rule (rule_id)
@@ -2011,6 +2018,7 @@ CREATE TABLE branched_icinga_host (
   imports TEXT DEFAULT NULL,
   `groups` TEXT DEFAULT NULL,
   vars MEDIUMTEXT DEFAULT NULL,
+  var_deltas TEXT DEFAULT NULL,
   set_null TEXT DEFAULT NULL,
   PRIMARY KEY (branch_uuid, uuid),
   UNIQUE INDEX branch_object_name (branch_uuid, object_name),
@@ -2118,6 +2126,7 @@ CREATE TABLE branched_icinga_user (
   imports TEXT DEFAULT NULL,
   `groups` TEXT DEFAULT NULL,
   vars MEDIUMTEXT DEFAULT NULL,
+  var_deltas TEXT DEFAULT NULL,
   set_null TEXT DEFAULT NULL,
   PRIMARY KEY (branch_uuid, uuid),
   UNIQUE INDEX branch_object_name (branch_uuid, object_name),
@@ -2305,6 +2314,7 @@ CREATE TABLE branched_icinga_service (
   imports TEXT DEFAULT NULL,
   `groups` TEXT DEFAULT NULL,
   vars MEDIUMTEXT DEFAULT NULL,
+  var_deltas TEXT DEFAULT NULL,
   set_null TEXT DEFAULT NULL,
   PRIMARY KEY (branch_uuid, uuid),
   INDEX search_object_name (object_name),
@@ -2369,6 +2379,7 @@ CREATE TABLE branched_icinga_notification (
 
   imports TEXT DEFAULT NULL,
   vars MEDIUMTEXT DEFAULT NULL,
+  var_deltas TEXT DEFAULT NULL,
   set_null TEXT DEFAULT NULL,
   PRIMARY KEY (branch_uuid, uuid),
   UNIQUE INDEX branch_object_name (branch_uuid, object_name),
@@ -2466,4 +2477,4 @@ CREATE TABLE icinga_usergroup_user_resolved
 
 INSERT INTO director_schema_migration
   (schema_version, migration_time)
-  VALUES (192, NOW());
+  VALUES (193, NOW());
