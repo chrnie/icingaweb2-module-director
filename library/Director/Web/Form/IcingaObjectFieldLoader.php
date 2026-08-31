@@ -7,6 +7,9 @@ use Icinga\Data\Filter\Filter;
 use Icinga\Data\Filter\FilterChain;
 use Icinga\Data\Filter\FilterExpression;
 use Icinga\Exception\IcingaException;
+use Icinga\Module\Director\CustomVariable\CustomVariable;
+use Icinga\Module\Director\CustomVariable\CustomVariableArray;
+use Icinga\Module\Director\CustomVariable\CustomVariables;
 use Icinga\Module\Director\Hook\HostFieldHook;
 use Icinga\Module\Director\Hook\ServiceFieldHook;
 use Icinga\Module\Director\Objects\DirectorDatafieldCategory;
@@ -16,6 +19,8 @@ use Icinga\Module\Director\Objects\IcingaObject;
 use Icinga\Module\Director\Objects\DirectorDatafield;
 use Icinga\Module\Director\Objects\IcingaService;
 use Icinga\Module\Director\Objects\ObjectApplyMatches;
+use Icinga\Module\Director\Web\Form\Element\ExtensibleSet;
+use Icinga\Module\Director\Web\Form\IplElement\ExtensibleSetElement;
 use Icinga\Web\Hook;
 use stdClass;
 use Zend_Db_Select as ZfSelect;
@@ -39,6 +44,15 @@ class IcingaObjectFieldLoader
 
     protected $elements;
 
+    /** @var ZfElement[] Array valued elements, indexed by variable name */
+    protected $arrayElements = array();
+
+    /** @var bool Whether to offer '+=' and '-=' for suitable data types */
+    protected $withOperators = true;
+
+    /** @var array Inherited values we prefilled, indexed by variable name */
+    protected $prefilledValues = array();
+
     protected $forceNull = array();
 
     /** @var array Map element names to variable names 'elName' => 'varName' */
@@ -49,6 +63,18 @@ class IcingaObjectFieldLoader
         $this->object = $object;
         $this->connection = $object->getConnection();
         $this->db = $this->connection->getDbAdapter();
+    }
+
+    /**
+     * Plain values only, used by forms dealing with multiple objects at once
+     *
+     * @return $this
+     */
+    public function disableOperators()
+    {
+        $this->withOperators = false;
+
+        return $this;
     }
 
     public function addFieldsToForm(DirectorObjectForm $form)
@@ -147,10 +173,21 @@ class IcingaObjectFieldLoader
                 continue;
             }
 
+            if ($el instanceof ExtensibleSet && $el->getAttrib('withOperators')) {
+                $this->applyArrayEntries($varName, $el, $values, $vars);
+                continue;
+            }
+
             $el->setValue($value);
             $value = $el->getValue();
             if ($value === '' || $value === array()) {
                 $value = null;
+            }
+
+            if ($value !== null && $this->isUntouchedPrefill($varName, $value)) {
+                // Nobody changed what we prefilled, so keep on inheriting it
+                $value = null;
+                $el->setValue([]);
             }
 
             $vars->set($varName, $value);
@@ -164,6 +201,137 @@ class IcingaObjectFieldLoader
         }
 
         return $this;
+    }
+
+    /**
+     * Take over the entries of an array field
+     *
+     * A browser submits a list of values plus a parallel list of operators -
+     * the DOM is a list, so this is where the two meet. What comes out of it is
+     * either an assignment or a delta, never both
+     *
+     * @param string          $varName
+     * @param ZfElement       $el
+     * @param array           $values
+     * @param CustomVariables $vars
+     */
+    protected function applyArrayEntries($varName, ZfElement $el, $values, CustomVariables $vars)
+    {
+        $elName = $el->getName();
+        $rawValues = isset($values[$elName]) ? array_values((array) $values[$elName]) : [];
+        $rawOperators = isset($values[$elName . ExtensibleSetElement::OPERATOR_SUFFIX])
+            ? self::sanitizeOperators((array) $values[$elName . ExtensibleSetElement::OPERATOR_SUFFIX])
+            : [];
+
+        $pressed = self::pressedOperatorIndex($elName, $values);
+        if ($pressed !== null && array_key_exists($pressed, $rawOperators)) {
+            $rawOperators[$pressed] = self::nextOperator($rawOperators[$pressed]);
+        }
+
+        // The form redisplays what has been submitted, so whatever we drop
+        // below must not touch these
+        while (count($rawOperators) < count($rawValues)) {
+            $rawOperators[] = CustomVariable::OPERATOR_SET;
+        }
+        $el->setAttrib('operators', $rawOperators);
+
+        $assigned = [];
+        $added = [];
+        $removed = [];
+        foreach ($rawValues as $idx => $value) {
+            if (! is_scalar($value) || ! strlen((string) $value)) {
+                continue;
+            }
+
+            if ($rawOperators[$idx] === CustomVariable::OPERATOR_ADD) {
+                $added[] = $value;
+            } elseif ($rawOperators[$idx] === CustomVariable::OPERATOR_REMOVE) {
+                $removed[] = $value;
+            } else {
+                $assigned[] = $value;
+            }
+        }
+
+        if (! empty($added) || ! empty($removed)) {
+            // Rows still carrying '=' are either the ones we prefilled - they
+            // just show what is inherited, and storing them would replace the
+            // very value we are extending - or a mix that ExtensibleSet refuses
+            // to save. Either way they must not reach the variable
+            $vars->set($varName, []);
+            $vars->setDeltas($varName, ['add' => $added, 'remove' => $removed]);
+
+            return;
+        }
+
+        if ($this->isUntouchedPrefill($varName, $assigned)) {
+            // Nobody changed what we prefilled, so keep on inheriting it
+            $assigned = [];
+        }
+
+        if (empty($assigned)) {
+            $vars->set($varName, null);
+
+            return;
+        }
+
+        // The delta goes first, a variable is either assigned or extended
+        $vars->setDeltas($varName, null);
+        $vars->set($varName, $assigned);
+    }
+
+    /**
+     * @param string $elName
+     * @param array  $values
+     * @return int|null The entry whose operator button has been pressed
+     */
+    protected static function pressedOperatorIndex($elName, $values)
+    {
+        $key = $elName . ExtensibleSetElement::OPERATOR_ACTION_SUFFIX;
+        if (! isset($values[$key]) || ! is_numeric($values[$key])) {
+            return null;
+        }
+
+        return (int) $values[$key];
+    }
+
+    /**
+     * Whatever a browser sent us, make valid operators out of it
+     *
+     * @param array $operators
+     * @return string[]
+     */
+    protected static function sanitizeOperators(array $operators)
+    {
+        $valid = [
+            CustomVariable::OPERATOR_SET,
+            CustomVariable::OPERATOR_ADD,
+            CustomVariable::OPERATOR_REMOVE,
+        ];
+
+        $result = [];
+        foreach (array_values($operators) as $operator) {
+            $result[] = in_array($operator, $valid, true)
+                ? $operator
+                : CustomVariable::OPERATOR_SET;
+        }
+
+        return $result;
+    }
+
+    /**
+     * @param string $operator
+     * @return string
+     */
+    protected static function nextOperator($operator)
+    {
+        switch ($operator) {
+            case CustomVariable::OPERATOR_SET:
+                return CustomVariable::OPERATOR_ADD;
+            case CustomVariable::OPERATOR_ADD:
+                return CustomVariable::OPERATOR_REMOVE;
+            default:
+                return CustomVariable::OPERATOR_SET;
+        }
     }
 
     /**
@@ -399,6 +567,13 @@ class IcingaObjectFieldLoader
             }
             $this->nameMap[$elName] = $name;
             $elements[$name] = $el;
+
+            if ($el instanceof ExtensibleSet) {
+                $this->arrayElements[$name] = $el;
+                if ($this->withOperators) {
+                    $el->setAttrib('withOperators', true);
+                }
+            }
         }
 
         return $elements;
@@ -414,6 +589,102 @@ class IcingaObjectFieldLoader
                 $el->setValue($v);
             }
         }
+
+        if (! empty($this->arrayElements) && $object->supportsCustomVars()) {
+            $vars = $object->vars();
+            foreach ($this->arrayElements as $k => $el) {
+                list($rowValues, $rowOperators) = self::rowsForVar($vars->get($k));
+                if (! empty($rowValues)) {
+                    $el->setValue($rowValues);
+                }
+                $el->setAttrib('operators', $rowOperators);
+            }
+
+            $this->prefillInheritedValues($object);
+        }
+    }
+
+    /**
+     * The rows an array field shows for the given variable
+     *
+     * A row is a value plus an operator, a variable is an assignment or a
+     * delta. A delta has no own value, so what it adds and removes is what
+     * shows up - the entries one is supposed to edit
+     *
+     * @param CustomVariable|null $var
+     * @return array Values and operators, aligned
+     */
+    protected static function rowsForVar($var)
+    {
+        // A variable that has just been unset is still around, marked as
+        // deleted. Showing its entries would bring back the row somebody
+        // removed a moment ago
+        if ($var === null || $var->hasBeenDeleted()) {
+            return [[], []];
+        }
+
+        if (! $var instanceof CustomVariableArray || ! $var->hasDelta()) {
+            $values = (array) $var->getValue();
+
+            return [$values, array_fill(0, count($values), CustomVariable::OPERATOR_SET)];
+        }
+
+        $values = [];
+        $operators = [];
+        foreach ($var->getAddedValues() as $value) {
+            $values[] = $value;
+            $operators[] = CustomVariable::OPERATOR_ADD;
+        }
+        foreach ($var->getRemovedValues() as $value) {
+            $values[] = $value;
+            $operators[] = CustomVariable::OPERATOR_REMOVE;
+        }
+
+        return [$values, $operators];
+    }
+
+    /**
+     * Show inherited values as editable entries, saving retyping them all
+     *
+     * Hint: what we prefilled is remembered. Saving an untouched form must not
+     * turn an inherited value into an own one, see setValues()
+     *
+     * @param IcingaObject $object
+     */
+    protected function prefillInheritedValues(IcingaObject $object)
+    {
+        $vars = $object->vars();
+        foreach ($this->arrayElements as $varName => $element) {
+            $own = $vars->get($varName);
+            if ($own !== null && ! $own->hasBeenDeleted()) {
+                continue;
+            }
+
+            $inherited = $element->getAttrib('inherited');
+            if (is_array($inherited) && ! empty($inherited)) {
+                $inherited = array_values($inherited);
+                $element->setValue($inherited);
+                // Showing what is inherited, so they all override for now
+                $element->setAttrib(
+                    'operators',
+                    array_fill(0, count($inherited), CustomVariable::OPERATOR_SET)
+                );
+                $element->setAttrib('prefilled', $inherited);
+                $this->prefilledValues[$varName] = $inherited;
+            }
+        }
+    }
+
+    /**
+     * @param string $varName
+     * @param mixed  $value
+     * @return bool Whether this is an untouched value we prefilled
+     */
+    protected function isUntouchedPrefill($varName, $value)
+    {
+        return array_key_exists($varName, $this->prefilledValues)
+            && is_array($value)
+            && array_values($value) === $this->prefilledValues[$varName];
     }
 
     protected function mergeFields($listOfFields)

@@ -940,6 +940,47 @@ form.director-form dd.active li.active input.related-action[type='submit'] {
     display: inline-block;
 }
 
+/* The operator of a single entry has to be readable at any time, not only
+   while its row is being edited. It shows a character instead of an icon, and
+   it lives in the regular flow, not in the absolutely placed button bar */
+form.director-form dd button.entry-operator {
+    display: inline-block;
+    position: static;
+    font-family: inherit;
+    font-weight: bold;
+    font-size: 1em;
+    line-height: 1;
+    width: 1.8em;
+    padding: 0.1em 0;
+    margin: 0.2em 0;
+    vertical-align: middle;
+    text-align: center;
+    color: @text-color-light;
+    background-color: @gray-lightest;
+    border: 1px solid transparent;
+    .rounded-corners(0.3em);
+
+    &.operator-add {
+        color: @color-ok;
+    }
+
+    &.operator-remove {
+        color: @color-critical;
+    }
+
+    &:hover {
+        border-color: @gray-light;
+        cursor: pointer;
+    }
+}
+
+/* Make room for it, the value field would claim the full width otherwise */
+form.director-form dd.active ul.extensible-set li input[type=text].with-operator,
+ul.extensible-set.sortable li input[type=text].with-operator {
+    width: ~"calc(100% - 2.2em)";
+    vertical-align: middle;
+}
+
 form.director-form {
   select.config-diff {
     width: auto;

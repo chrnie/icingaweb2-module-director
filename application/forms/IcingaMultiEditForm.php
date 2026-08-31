@@ -49,6 +49,8 @@ class IcingaMultiEditForm extends DirectorObjectForm
         $object = $this->object;
 
         $loader = new IcingaObjectFieldLoader($object);
+        // Modifying operators for many objects at once is not supported
+        $loader->disableOperators();
         $loader->prepareElements($this);
         $loader->addFieldsToForm($this);
         $this->varNameMap = $loader->getNameMap();

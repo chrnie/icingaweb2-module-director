@@ -3,6 +3,7 @@
 namespace Icinga\Module\Director\Web\Form\IplElement;
 
 use Icinga\Exception\ProgrammingError;
+use Icinga\Module\Director\CustomVariable\CustomVariable;
 use Icinga\Module\Director\IcingaConfig\ExtensibleSet as Set;
 use Icinga\Module\Director\Web\Form\IconHelper;
 use ipl\Html\BaseHtmlElement;
@@ -47,6 +48,44 @@ class ExtensibleSetElement extends BaseHtmlElement
     private $inherited;
 
     private $inheritedFrom;
+
+    /** @var string[] One operator per entry, aligned with $value */
+    private $operators = [];
+
+    /** @var bool Whether entries may carry '=', '+' and '-' */
+    private $withOperators = false;
+
+    /** Suffix for the form field carrying one operator per entry */
+    public const OPERATOR_SUFFIX = '__OP';
+
+    /** Suffix for the button cycling a single entry's operator, value is its index */
+    public const OPERATOR_ACTION_SUFFIX = '__OP_CYCLE';
+
+    /**
+     * Entry operators keyed exactly like the values they belong to
+     *
+     * Padding makes sure that whatever move is valid for the values is also
+     * valid for the operators, so that both survive a move or a removal
+     *
+     * @param array $values
+     * @param mixed $operators Whatever the browser submitted
+     * @return array|null Null when this set carries no operators
+     */
+    public static function operatorsAlignedWith(array $values, $operators)
+    {
+        if (! is_array($operators)) {
+            return null;
+        }
+
+        $result = [];
+        foreach (array_keys($values) as $key) {
+            $result[$key] = isset($operators[$key])
+                ? $operators[$key]
+                : CustomVariable::OPERATOR_SET;
+        }
+
+        return $result;
+    }
 
     protected $defaultAttributes = [
         'class' => 'extensible-set'
@@ -147,6 +186,20 @@ class ExtensibleSetElement extends BaseHtmlElement
             $this->inheritedFrom = $attribs['inheritedFrom'];
             unset($attribs['inheritedFrom']);
         }
+
+        if (array_key_exists('withOperators', $attribs)) {
+            $this->withOperators = (bool) $attribs['withOperators'];
+            unset($attribs['withOperators']);
+        }
+
+        if (array_key_exists('operators', $attribs)) {
+            $operators = $attribs['operators'];
+            $this->operators = is_array($operators) ? array_values($operators) : [];
+            unset($attribs['operators']);
+        }
+
+        // Bookkeeping for our validator, nothing to be rendered
+        unset($attribs['prefilled']);
 
         if (array_key_exists('multiOptions', $attribs)) {
             $this->setMultiOptions($attribs['multiOptions']);
@@ -344,7 +397,7 @@ class ExtensibleSetElement extends BaseHtmlElement
         }
         $total = count($this->value);
 
-        foreach ($this->value as $val) {
+        foreach ($this->value as $valueIndex => $val) {
             if (in_array($val, $this->hideOptions)) {
                 continue;
             }
@@ -374,10 +427,25 @@ class ExtensibleSetElement extends BaseHtmlElement
             ]);
 
             $this->addRemainingAttributes($this->eventuallyDisable($text));
-            $this->add(Html::tag('li', null, [
+            $content = [
                 $this->getOptionButtons($this->chosenOptionCount, $total),
                 $text
-            ]));
+            ];
+            if ($this->withOperators) {
+                $text->getAttributes()->add('class', 'with-operator');
+                // Hint: submitted as a list parallel to the entries. Moving or
+                //       removing a row realigns both, see beforeSetup()
+                \array_unshift($content, Html::tag('input', [
+                    'type'  => 'hidden',
+                    'name'  => $this->name . self::OPERATOR_SUFFIX . '[]',
+                    'value' => $this->operatorFor($valueIndex),
+                ]));
+                \array_unshift($content, $this->renderOperatorButton(
+                    $this->chosenOptionCount,
+                    $this->operatorFor($valueIndex)
+                ));
+            }
+            $this->add(Html::tag('li', null, $content));
             $this->chosenOptionCount++;
         }
     }
@@ -434,6 +502,26 @@ class ExtensibleSetElement extends BaseHtmlElement
         $buttons->add($this->renderDeleteButton($name, $cnt));
 
         return $buttons;
+    }
+
+    /**
+     * @param int|null $valueIndex
+     * @return string
+     */
+    private function operatorFor($valueIndex)
+    {
+        if (! isset($this->operators[$valueIndex])) {
+            return CustomVariable::OPERATOR_SET;
+        }
+
+        $operator = $this->operators[$valueIndex];
+        $known = [
+            CustomVariable::OPERATOR_SET,
+            CustomVariable::OPERATOR_ADD,
+            CustomVariable::OPERATOR_REMOVE,
+        ];
+
+        return in_array($operator, $known, true) ? $operator : CustomVariable::OPERATOR_SET;
     }
 
     protected function newInlineButtons($content = null)
@@ -516,6 +604,48 @@ class ExtensibleSetElement extends BaseHtmlElement
             $this->translate('Add a new entry'),
             'plus'
         );
+    }
+
+    /**
+     * A button cycling through '=', '+' and '-' for a single entry
+     *
+     * @param int    $cnt
+     * @param string $operator
+     * @return BaseHtmlElement
+     */
+    private function renderOperatorButton($cnt, $operator)
+    {
+        $titles = [
+            CustomVariable::OPERATOR_SET => $this->translate(
+                'This entry overrides the inherited value. Click to add it instead'
+            ),
+            CustomVariable::OPERATOR_ADD => $this->translate(
+                'This entry is added to the inherited value. Click to remove it instead'
+            ),
+            CustomVariable::OPERATOR_REMOVE => $this->translate(
+                'This entry is removed from the inherited value. Click to override instead'
+            ),
+        ];
+
+        $classes = [
+            CustomVariable::OPERATOR_SET    => 'operator-set',
+            CustomVariable::OPERATOR_ADD    => 'operator-add',
+            CustomVariable::OPERATOR_REMOVE => 'operator-remove',
+        ];
+
+        // Hint: a button, not an input. That way the entry index travels in
+        //       the value, while the operator itself stays the visible label.
+        //       No 'related-action' either, that class hides buttons until
+        //       their row is active, and our operator has to stay visible
+        $input = Html::tag('button', [
+            'type'  => 'submit',
+            'class' => ['entry-operator', $classes[$operator]],
+            'name'  => $this->name . self::OPERATOR_ACTION_SUFFIX,
+            'value' => $cnt,
+            'title' => $titles[$operator],
+        ], $operator);
+
+        return $this->eventuallyDisable($input);
     }
 
     private function renderDeleteButton($name, $cnt)

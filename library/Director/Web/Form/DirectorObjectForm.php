@@ -21,6 +21,7 @@ use Icinga\Module\Director\Objects\IcingaObject;
 use Icinga\Module\Director\Resolver\TemplateTree;
 use Icinga\Module\Director\Util;
 use Icinga\Module\Director\Web\Form\Element\ExtensibleSet;
+use Icinga\Module\Director\Web\Form\IplElement\ExtensibleSetElement;
 use Icinga\Module\Director\Web\Form\Validate\NamePattern;
 use Zend_Form_Element as ZfElement;
 use Zend_Form_Element_Select as ZfSelect;
@@ -801,19 +802,39 @@ abstract class DirectorObjectForm extends DirectorForm
         foreach ($post as $key => $value) {
             if (preg_match('/^(.+?)_(\d+)__(MOVE_DOWN|MOVE_UP|REMOVE)$/', $key, $m)) {
                 $values[$m[1]] = array_filter($values[$m[1]], 'strlen');
+                // Entry operators are a parallel list, they have to undergo the
+                // very same move. Otherwise they would stay at their position
+                // while their entry travels to another one
+                $operatorKey = $m[1] . ExtensibleSetElement::OPERATOR_SUFFIX;
+                $operators = isset($values[$operatorKey])
+                    ? ExtensibleSetElement::operatorsAlignedWith($values[$m[1]], $values[$operatorKey])
+                    : null;
+
                 switch ($m[3]) {
                     case 'MOVE_UP':
                         $this->moveUpInSet($values[$m[1]], $m[2]);
+                        if ($operators !== null) {
+                            $this->moveUpInSet($operators, $m[2]);
+                        }
                         break;
                     case 'MOVE_DOWN':
                         $this->moveDownInSet($values[$m[1]], $m[2]);
+                        if ($operators !== null) {
+                            $this->moveDownInSet($operators, $m[2]);
+                        }
                         break;
                     case 'REMOVE':
                         $this->removeFromSet($values[$m[1]], $m[2]);
+                        if ($operators !== null) {
+                            $this->removeFromSet($operators, $m[2]);
+                        }
                         break;
                 }
 
                 $this->getRequest()->setPost($m[1], $values[$m[1]]);
+                if ($operators !== null) {
+                    $this->getRequest()->setPost($operatorKey, $operators);
+                }
             }
         }
     }
