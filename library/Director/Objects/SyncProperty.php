@@ -23,7 +23,8 @@ class SyncProperty extends DbObject
         'destination_field' => null,
         'priority'          => null,
         'filter_expression' => null,
-        'merge_policy'      => null
+        'merge_policy'      => null,
+        'var_operator'      => null
     ];
 
     protected function beforeStore()

@@ -580,14 +580,36 @@ class Sync
                     }
                 } elseif (substr($prop, 0, 5) === 'vars.') {
                     $varName = substr($prop, 5);
-                    if (substr($varName, -2) === '[]') {
+                    $mergesRows = substr($varName, -2) === '[]';
+                    if ($mergesRows) {
                         $varName = substr($varName, 0, -2);
-                        $object->vars()->$varName = array_merge(
-                            (array) ($object->vars()->$varName),
-                            (array) $val
-                        );
+                    }
+
+                    $operator = $p->get('var_operator');
+                    if ($operator === '+=' || $operator === '-=') {
+                        // A single value becomes a single entry, there is no need
+                        // to build an array just to add one tag. And a row without
+                        // a value has nothing to add or remove, so we leave the
+                        // variable alone instead of assigning it
+                        if ($val !== null) {
+                            if ($operator === '+=') {
+                                $object->vars()->addEntries($varName, (array) $val);
+                            } else {
+                                $object->vars()->removeEntries($varName, (array) $val);
+                            }
+                        }
                     } else {
-                        $this->setPropertyWithNullLogic($object, $objectKey, $prop, $val, $properties);
+                        // A rule owns the variables it writes, so assigning one
+                        // also drops whatever delta has been configured for it
+                        $object->vars()->setDeltas($varName, null);
+                        if ($mergesRows) {
+                            $object->vars()->$varName = array_merge(
+                                (array) ($object->vars()->$varName),
+                                (array) $val
+                            );
+                        } else {
+                            $this->setPropertyWithNullLogic($object, $objectKey, $prop, $val, $properties);
+                        }
                     }
                 } else {
                     $this->setPropertyWithNullLogic($object, $objectKey, $prop, $val, $properties);

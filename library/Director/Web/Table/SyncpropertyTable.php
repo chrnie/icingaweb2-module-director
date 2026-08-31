@@ -56,12 +56,17 @@ class SyncpropertyTable extends ZfQueryBasedTable
 
     public function renderRow($row)
     {
+        $destination = $row->destination_field;
+        if (! empty($row->var_operator) && $row->var_operator !== '=') {
+            $destination = sprintf('%s %s', $destination, $row->var_operator);
+        }
+
         return $this->addSortPriorityButtons(
             $this::row([
                 $row->source_name,
                 $row->source_expression,
                 new Link(
-                    $row->destination_field,
+                    $destination,
                     'director/syncrule/editproperty',
                     [
                         'id'      => $row->id,
@@ -97,7 +102,8 @@ class SyncpropertyTable extends ZfQueryBasedTable
                 'destination_field' => 'p.destination_field',
                 'priority'          => 'p.priority',
                 'filter_expression' => 'p.filter_expression',
-                'merge_policy'      => 'p.merge_policy'
+                'merge_policy'      => 'p.merge_policy',
+                'var_operator'      => 'p.var_operator'
             ]
         )->join(
             ['r' => 'sync_rule'],

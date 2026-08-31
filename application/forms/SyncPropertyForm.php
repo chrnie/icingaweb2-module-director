@@ -112,6 +112,24 @@ class SyncPropertyForm extends DirectorObjectForm
             ));
         }
 
+        if ($isCustomvar) {
+            $this->addElement('select', 'var_operator', array(
+                'label'        => $this->translate('Assignment'),
+                'description'  => $this->translate(
+                    'Whether the synchronized value should override the value inherited from'
+                    . ' imported templates, or whether it should extend respectively shrink it.'
+                    . ' Rendered as "=", "+=" or "-=" in your Icinga 2 configuration. Please note'
+                    . ' that "+=" and "-=" work for arrays and (except for "-=") dictionaries only'
+                ),
+                'multiOptions' => array(
+                    '='  => $this->translate('Override inherited value (=)'),
+                    '+=' => $this->translate('Add to inherited value (+=)'),
+                    '-=' => $this->translate('Remove from inherited value (-=)'),
+                ),
+                'value'        => '=',
+            ));
+        }
+
         if ($isCustomvar || $destination === 'vars') {
             $this->addElement('select', 'merge_policy', array(
                 'label'        => $this->translate('Merge Policy'),
