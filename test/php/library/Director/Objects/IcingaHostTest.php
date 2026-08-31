@@ -12,6 +12,7 @@ use Icinga\Module\Director\Objects\IcingaHostGroup;
 use Icinga\Module\Director\Objects\IcingaZone;
 use Icinga\Module\Director\Test\BaseTestCase;
 use Icinga\Exception\IcingaException;
+use InvalidArgumentException;
 
 class IcingaHostTest extends BaseTestCase
 {
@@ -218,6 +219,95 @@ class IcingaHostTest extends BaseTestCase
             (string) $this->host(),
             $this->loadRendered('host1')
         );
+    }
+
+    public function testCustomVarDeltasAreNotShippedWhenUnused()
+    {
+        $plain = $this->host()->toPlainObject();
+        $this->assertFalse(property_exists($plain, 'var_deltas'));
+    }
+
+    public function testADeltaSurvivesAPlainObjectRoundTrip()
+    {
+        $host = $this->host();
+        $host->set('var_deltas', (object) [
+            'list' => (object) ['add' => ['docker'], 'remove' => ['php-fpm']]
+        ]);
+
+        $plain = $host->toPlainObject();
+        $this->assertEquals(
+            (object) ['list' => ['add' => ['docker'], 'remove' => ['php-fpm']]],
+            $plain->var_deltas
+        );
+        // A delta has no own value, so it stays out of 'vars'
+        $this->assertFalse(property_exists($plain->vars, 'list'));
+
+        $restored = IcingaHost::fromPlainObject($plain, $this->getDb());
+        $this->assertEquals(
+            ['add' => ['docker'], 'remove' => ['php-fpm']],
+            $restored->vars()->getDeltas('list')
+        );
+    }
+
+    public function testADeltaDoesNotDependOnAssignmentOrder()
+    {
+        // Hint: toPlainObject() output is sorted, so 'var_deltas' usually
+        //       arrives before the 'vars' it belongs to. BranchedObject and
+        //       friends replay it in exactly that order
+        $host = $this->host();
+        $host->set('var_deltas', (object) ['list' => (object) ['add' => ['docker']]]);
+        $host->set('vars', (object) ['other' => 'b']);
+
+        $this->assertEquals(['add' => ['docker']], $host->vars()->getDeltas('list'));
+        $this->assertStringContainsString('vars.list += [ "docker" ]', (string) $host);
+    }
+
+    public function testADeltaSurvivesAPlainObjectReplay()
+    {
+        $host = $this->host();
+        $host->set('var_deltas', (object) ['list' => (object) ['add' => ['docker']]]);
+
+        $replayed = IcingaHost::create([], $this->getDb());
+        foreach ((array) $host->toPlainObject(false, true) as $key => $value) {
+            $replayed->set($key, $value);
+        }
+
+        $this->assertEquals(['add' => ['docker']], $replayed->vars()->getDeltas('list'));
+    }
+
+    public function testOnlyVarDeltasDecidesWhichVariablesExtend()
+    {
+        $host = $this->host();
+        $host->set('var_deltas', (object) ['list' => (object) ['add' => ['docker']]]);
+        $host->set('vars', (object) ['other' => ['b']]);
+
+        // 'other' has never been mentioned as a delta, so it assigns
+        $this->assertEquals(['list' => ['add' => ['docker']]], $host->vars()->getAllDeltas());
+
+        // And an empty 'var_deltas' takes them all back
+        $host->set('var_deltas', (object) []);
+        $this->assertEquals([], $host->vars()->getAllDeltas());
+    }
+
+    public function testAssigningAndExtendingTheSameVariableIsRefused()
+    {
+        $host = $this->host();
+        $host->set('var_deltas', (object) ['list' => (object) ['add' => ['docker']]]);
+
+        $this->expectException(InvalidArgumentException::class);
+        $host->set('vars', (object) ['list' => ['docker']]);
+    }
+
+    public function testAddedAndRemovedEntriesAreRenderedAsTwoLines()
+    {
+        $host = $this->host();
+        $host->set('var_deltas', (object) [
+            'list' => (object) ['add' => ['docker'], 'remove' => ['php-fpm']]
+        ]);
+
+        $rendered = (string) $host;
+        $this->assertStringContainsString('vars.list += [ "docker" ]', $rendered);
+        $this->assertStringContainsString('vars.list -= [ "php-fpm" ]', $rendered);
     }
 
     public function testGivesPlainObjectWithInvalidUnresolvedDependencies()

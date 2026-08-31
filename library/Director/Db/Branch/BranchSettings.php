@@ -14,7 +14,7 @@ class BranchSettings
     // TODO: Ranges is weird. key = scheduled_downtime_id, range_type, range_key
     public const ENCODED_ARRAYS = ['imports', 'groups', 'ranges', 'users', 'usergroups'];
 
-    public const ENCODED_DICTIONARIES = ['vars', 'arguments'];
+    public const ENCODED_DICTIONARIES = ['vars', 'var_deltas', 'arguments'];
 
     public const BRANCH_SPECIFIC_PROPERTIES = [
         'uuid',

@@ -7,6 +7,8 @@ use Icinga\Data\Filter\Filter;
 use Icinga\Data\Filter\FilterChain;
 use Icinga\Data\Filter\FilterExpression;
 use Icinga\Exception\NotFoundError;
+use Icinga\Module\Director\CustomVariable\CustomVariable;
+use Icinga\Module\Director\CustomVariable\CustomVariableArray;
 use Icinga\Module\Director\CustomVariable\CustomVariables;
 use Icinga\Module\Director\Data\Db\DbDataFormatter;
 use Icinga\Module\Director\Data\Db\DbObjectTypeRegistry;
@@ -113,6 +115,9 @@ abstract class IcingaObject extends DbObject implements IcingaConfigRenderer
     protected $connection;
 
     private $vars;
+
+    /** @var array Deltas, kept aside as they may arrive before their vars */
+    private $pendingVarDeltas = [];
 
     /** @var IcingaObjectGroups */
     private $groups;
@@ -701,6 +706,14 @@ abstract class IcingaObject extends DbObject implements IcingaConfigRenderer
             return $var->getValue();
         }
 
+        if ($key === 'var_deltas') {
+            return (object) $this->vars()->getAllDeltas();
+        }
+
+        if (substr($key, 0, 11) === 'var_deltas.') {
+            return $this->vars()->getDeltas(substr($key, 11));
+        }
+
         // e.g. zone_id
         if ($this->propertyIsRelation($key)) {
             return $this->getRelationId($key);
@@ -738,24 +751,45 @@ abstract class IcingaObject extends DbObject implements IcingaConfigRenderer
     {
         if ($key === 'vars') {
             $value = (array) $value;
+            $vars = $this->vars();
             $unset = [];
-            foreach ($this->vars() as $k => $f) {
+            foreach ($vars as $k => $f) {
                 if (! array_key_exists($k, $value)) {
                     $unset[] = $k;
                 }
             }
             foreach ($unset as $k) {
-                unset($this->vars()->$k);
+                unset($vars->$k);
             }
             foreach ($value as $k => $v) {
-                $this->vars()->set($k, $v);
+                $vars->set($k, $v);
             }
+
+            $this->applyVarDeltas();
+
+            return $this;
+        }
+
+        if ($key === 'var_deltas') {
+            $this->pendingVarDeltas = (array) $value;
+            $this->applyVarDeltas();
+
             return $this;
         }
 
         if (substr($key, 0, 5) === 'vars.') {
             //TODO: allow for deep keys
             $this->vars()->set(substr($key, 5), $value);
+            if (array_key_exists(substr($key, 5), $this->pendingVarDeltas)) {
+                $this->applyVarDeltas();
+            }
+            return $this;
+        }
+
+        if (substr($key, 0, 11) === 'var_deltas.') {
+            $varName = substr($key, 11);
+            $this->pendingVarDeltas[$varName] = $value;
+            $this->vars()->setDeltas($varName, $value);
             return $this;
         }
 
@@ -1309,6 +1343,8 @@ abstract class IcingaObject extends DbObject implements IcingaConfigRenderer
         $getInherited = 'getInherited' . $what;
         $getOrigins   = 'getOrigins'  . $what;
 
+        $isVars = $what === 'Vars';
+
         $blacklist = ['id', 'uuid', 'object_type', 'object_name', 'disabled'];
         foreach ($objects as $name => $object) {
             $origins = $object->$getOrigins();
@@ -1338,6 +1374,14 @@ abstract class IcingaObject extends DbObject implements IcingaConfigRenderer
                 if (in_array($key, $blacklist)) {
                     continue;
                 }
+                if ($isVars) {
+                    $value = static::applyDelta(
+                        $vals['_MERGED_'],
+                        $key,
+                        $value,
+                        $object->vars()->get($key)
+                    );
+                }
                 $vals['_MERGED_']->$key = $value;
                 $vals['_INHERITED_']->$key = $value;
                 $vals['_ORIGINS_']->$key = $name;
@@ -1349,12 +1393,96 @@ abstract class IcingaObject extends DbObject implements IcingaConfigRenderer
                 continue;
             }
 
+            if ($isVars) {
+                $value = static::applyDelta(
+                    $vals['_MERGED_'],
+                    $key,
+                    $value,
+                    $this->vars()->get($key)
+                );
+            }
+
             $vals['_MERGED_']->$key = $value;
         }
 
         $this->storeResolvedCache($what, $vals);
 
         return $vals;
+    }
+
+    /**
+     * Combine an already merged custom variable with a single object's value
+     *
+     * A variable extending what it inherited works on the merged value,
+     * everything else overrides it
+     *
+     * @param object              $merged Values merged so far
+     * @param string              $key    Variable name
+     * @param mixed               $value  The value carried by the current object
+     * @param CustomVariable|null $var    The variable itself, holding the delta
+     * @return mixed
+     */
+    protected static function applyDelta($merged, $key, $value, $var = null)
+    {
+        if (! $var instanceof CustomVariableArray || ! $var->hasDelta()) {
+            return $value;
+        }
+
+        return $var->applyTo(
+            property_exists($merged, $key) ? $merged->$key : null
+        );
+    }
+
+    /**
+     * (Re-)apply the deltas we have been told about to our variables
+     *
+     * Sorted plain objects ship 'var_deltas' before the 'vars' they belong to,
+     * so we remember them. A delta also creates the variable it names: it needs
+     * no own value to work on, and 'vars' does not carry one for it.
+     *
+     * Variables we are not told about lose their delta, which is what makes a
+     * complete assignment authoritative
+     *
+     * @return $this
+     */
+    protected function applyVarDeltas()
+    {
+        if (! $this->supportsCustomVars()) {
+            return $this;
+        }
+
+        $vars = $this->vars();
+        foreach ($vars as $key => $var) {
+            if (! array_key_exists($key, $this->pendingVarDeltas)) {
+                $vars->setDeltas($key, null);
+            }
+        }
+
+        // Afterwards, as this one creates variables
+        foreach ($this->pendingVarDeltas as $key => $deltas) {
+            $vars->setDeltas($key, $deltas);
+        }
+
+        return $this;
+    }
+
+    /**
+     * The given variables, without the ones carrying a delta
+     *
+     * A delta has no own value. Shipping the empty array we keep for it would
+     * claim one, and restoring that claim would replace what it extends
+     *
+     * @param object $vars
+     * @param array  $deltas
+     * @return object
+     */
+    protected static function withoutVars($vars, array $deltas)
+    {
+        foreach (array_keys($deltas) as $name) {
+            unset($vars->$name);
+        }
+
+        return $vars;
     }
 
     public function matches(Filter $filter)
@@ -2216,7 +2344,19 @@ abstract class IcingaObject extends DbObject implements IcingaConfigRenderer
     protected function renderCustomVars()
     {
         if ($this->supportsCustomVars()) {
-            return $this->vars()->toConfigString($this->isApplyRule());
+            $vars = $this->vars();
+            $inherited = null;
+            // Resolving is expensive, and only entry operators need this
+            if ($vars->needsInheritedValues()) {
+                try {
+                    $inherited = $this->getInheritedVars();
+                } catch (Exception $e) {
+                    // Rendering must not fail because of a broken inheritance
+                    $inherited = null;
+                }
+            }
+
+            return $vars->toConfigString($this->isApplyRule(), $inherited);
         }
 
         return '';
@@ -2803,6 +2943,7 @@ abstract class IcingaObject extends DbObject implements IcingaConfigRenderer
 
         if ($object->supportsCustomVars()) {
             $vars = $object->getVars();
+            $varDeltas = $object->vars()->getAllDeltas();
             $object->set('vars', []);
         }
 
@@ -2836,6 +2977,14 @@ abstract class IcingaObject extends DbObject implements IcingaConfigRenderer
                 foreach ($vars as $key => $var) {
                     $myVars->set($key, $var);
                 }
+            }
+
+            // Whoever owns the variables also owns their deltas
+            foreach ($vars as $key => $var) {
+                $myVars->setDeltas(
+                    $key,
+                    isset($varDeltas[$key]) ? $varDeltas[$key] : null
+                );
             }
         }
 
@@ -2952,9 +3101,15 @@ abstract class IcingaObject extends DbObject implements IcingaConfigRenderer
 
         if ($this->supportsCustomVars()) {
             if ($resolved) {
+                // Already combined, so shipping deltas would be misleading
                 $props['vars'] = $this->getResolvedVars();
             } else {
-                $props['vars'] = $this->getVars();
+                $deltas = $this->vars()->getAllDeltas();
+                $props['vars'] = self::withoutVars($this->getVars(), $deltas);
+                // Hint: shipped only when set, to not touch existing baskets
+                if (! empty($deltas)) {
+                    $props['var_deltas'] = (object) $deltas;
+                }
             }
         }
 
@@ -3186,8 +3341,18 @@ abstract class IcingaObject extends DbObject implements IcingaConfigRenderer
             $originalVars = $this->vars()->getOriginalVars();
             if (! empty($originalVars)) {
                 $props['vars'] = (object) [];
+                $deltas = [];
                 foreach ($originalVars as $name => $var) {
+                    if ($var instanceof CustomVariableArray && $var->hasDelta()) {
+                        // A delta has no own value, so it stays out of 'vars'
+                        $deltas[$name] = $var->getDeltas();
+                        continue;
+                    }
+
                     $props['vars']->$name = $var->getValue();
+                }
+                if (! empty($deltas)) {
+                    $props['var_deltas'] = (object) $deltas;
                 }
             }
         }
