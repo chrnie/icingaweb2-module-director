@@ -405,6 +405,13 @@ class CustomVariables implements Iterator, Countable, IcingaConfigRenderer
             ));
         }
 
+        if ($var->hasBeenDeleted()) {
+            // A delta names it, so it is not gone after all. Whoever unset it a
+            // moment ago did not know about the delta - assigning 'vars' drops
+            // every variable it does not mention, and the delta arrives after
+            $var->restore()->setValue([]);
+        }
+
         $before = $var->getDbDeltas();
         $modifier($var);
         if ($var->getDbDeltas() !== $before) {

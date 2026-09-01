@@ -80,6 +80,17 @@ abstract class CustomVariable implements IcingaConfigRenderer
         return $this;
     }
 
+    /**
+     * Bring us back after we have been unset
+     *
+     * @return $this
+     */
+    public function restore()
+    {
+        $this->deleted = false;
+        return $this;
+    }
+
     // TODO: abstract
     public function getDbValue()
     {

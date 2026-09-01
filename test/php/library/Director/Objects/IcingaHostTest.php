@@ -239,8 +239,8 @@ class IcingaHostTest extends BaseTestCase
             (object) ['list' => ['add' => ['docker'], 'remove' => ['php-fpm']]],
             $plain->var_deltas
         );
-        // A delta has no own value, so it stays out of 'vars'
-        $this->assertFalse(property_exists($plain->vars, 'list'));
+        // 'vars' stays complete, the variable ships its own (empty) value
+        $this->assertEquals([], $plain->vars->list);
 
         $restored = IcingaHost::fromPlainObject($plain, $this->getDb());
         $this->assertEquals(
@@ -273,6 +273,26 @@ class IcingaHostTest extends BaseTestCase
         }
 
         $this->assertEquals(['add' => ['docker']], $replayed->vars()->getDeltas('list'));
+    }
+
+    /**
+     * The replay BranchedObject::getBranchedDbObject() performs on every single
+     * load: the properties of an object are set on an object that already has
+     * them. Assigning 'vars' unsets whatever it does not mention, so a delta
+     * variable must survive being dropped and named again
+     */
+    public function testADeltaSurvivesBeingReplayedOntoItself()
+    {
+        $host = $this->host();
+        $host->set('var_deltas', (object) ['list' => (object) ['add' => ['docker']]]);
+
+        foreach ((array) $host->toPlainObject(false, true) as $key => $value) {
+            $host->set($key, $value);
+        }
+
+        $this->assertEquals(['add' => ['docker']], $host->vars()->getDeltas('list'));
+        $this->assertFalse($host->vars()->get('list')->hasBeenDeleted());
+        $this->assertStringContainsString('vars.list += [ "docker" ]', (string) $host);
     }
 
     public function testOnlyVarDeltasDecidesWhichVariablesExtend()

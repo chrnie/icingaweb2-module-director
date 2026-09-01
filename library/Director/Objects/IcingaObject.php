@@ -1466,25 +1466,6 @@ abstract class IcingaObject extends DbObject implements IcingaConfigRenderer
         return $this;
     }
 
-    /**
-     * The given variables, without the ones carrying a delta
-     *
-     * A delta has no own value. Shipping the empty array we keep for it would
-     * claim one, and restoring that claim would replace what it extends
-     *
-     * @param object $vars
-     * @param array  $deltas
-     * @return object
-     */
-    protected static function withoutVars($vars, array $deltas)
-    {
-        foreach (array_keys($deltas) as $name) {
-            unset($vars->$name);
-        }
-
-        return $vars;
-    }
-
     public function matches(Filter $filter)
     {
         // TODO: speed up by passing only desired properties (filter columns) to
@@ -3104,9 +3085,13 @@ abstract class IcingaObject extends DbObject implements IcingaConfigRenderer
                 // Already combined, so shipping deltas would be misleading
                 $props['vars'] = $this->getResolvedVars();
             } else {
-                $deltas = $this->vars()->getAllDeltas();
-                $props['vars'] = self::withoutVars($this->getVars(), $deltas);
+                // Hint: a variable carrying a delta ships its own (empty) value
+                //       here as well. 'vars' has to stay complete: whoever
+                //       assigns it drops every variable it does not mention,
+                //       and BranchedObject replays it on every single load
+                $props['vars'] = $this->getVars();
                 // Hint: shipped only when set, to not touch existing baskets
+                $deltas = $this->vars()->getAllDeltas();
                 if (! empty($deltas)) {
                     $props['var_deltas'] = (object) $deltas;
                 }
@@ -3343,13 +3328,10 @@ abstract class IcingaObject extends DbObject implements IcingaConfigRenderer
                 $props['vars'] = (object) [];
                 $deltas = [];
                 foreach ($originalVars as $name => $var) {
-                    if ($var instanceof CustomVariableArray && $var->hasDelta()) {
-                        // A delta has no own value, so it stays out of 'vars'
-                        $deltas[$name] = $var->getDeltas();
-                        continue;
-                    }
-
                     $props['vars']->$name = $var->getValue();
+                    if ($var instanceof CustomVariableArray && $var->hasDelta()) {
+                        $deltas[$name] = $var->getDeltas();
+                    }
                 }
                 if (! empty($deltas)) {
                     $props['var_deltas'] = (object) $deltas;

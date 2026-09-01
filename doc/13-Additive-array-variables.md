@@ -111,16 +111,18 @@ sync run. Both can be combined: collect the values from your import source with
 REST API, CLI and Baskets
 -------------------------
 
-A variable is **either assigned or extended**, never both. An extended one has
-no own value, so it does not show up in `vars` at all - it lives in an
-additional `var_deltas` property, with one bucket for what it adds and one for
-what it removes:
+A variable is **either assigned or extended**, never both. What it adds and
+what it removes lives in an additional `var_deltas` property, one bucket each.
+An extended variable has no own value, so it ships the empty array in `vars`:
 
 ```json
 {
     "object_name": "web01",
     "object_type": "object",
     "imports": [ "linux-base" ],
+    "vars": {
+        "disk_ignore": []
+    },
     "var_deltas": {
         "disk_ignore": {
             "add":    [ "/var/lib/docker" ],
@@ -129,6 +131,12 @@ what it removes:
     }
 }
 ```
+
+`vars` stays complete on purpose. Assigning it is authoritative - it drops every
+variable it does not mention - and the Director replays object properties
+through this very shape internally, on every single load of a branched object.
+A variable missing from `vars` is therefore a variable being deleted, never one
+that merely moved to `var_deltas`.
 
 This renders as:
 
